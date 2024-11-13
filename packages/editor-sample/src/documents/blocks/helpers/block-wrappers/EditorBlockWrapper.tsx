@@ -1,10 +1,11 @@
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { Box } from '@mui/material';
 import { useCurrentBlockId } from '../../../editor/EditorBlock';
 import { resetDocument, setSelectedBlockId, useDocument, useSelectedBlockId } from '../../../editor/EditorContext';
 import TuneMenu from './TuneMenu';
 import { useDrag, useDrop } from 'react-dnd';
 import { TEditorBlock } from '../../../editor/core';
+import { Identifier } from 'dnd-core';
 
 const ItemTypes = {
   BLOCK: 'block',
@@ -30,43 +31,53 @@ interface Operation {
 const DocumentUtils: DocumentUtils = {
   findBlockLocation: (document, blockId) => {
     for (const [parentId, b] of Object.entries(document)) {
-      // EmailLayout check
-      const block = b as any;
-      if (block.type === 'EmailLayout' && block.data.childrenIds?.includes(blockId)) {
-        return {
-          parentId,
-          parentType: 'EmailLayout',
-          index: block.data.childrenIds.indexOf(blockId),
-          columnIndex: null,
-          childrenIds: block.data.childrenIds,
-        };
-      }
+      const block = b as TEditorBlock;
 
-      // Container check
-      if (block.type === 'Container' && block.data.props.childrenIds.includes(blockId)) {
-        return {
-          parentId,
-          parentType: 'Container',
-          index: block.data.props.childrenIds.indexOf(blockId),
-          columnIndex: null,
-          childrenIds: block.data.props.childrenIds,
-        };
-      }
-
-      // ColumnsContainer check
-      if (block.type === 'ColumnsContainer') {
-        for (let colIndex = 0; colIndex < block.data.props.columns.length; colIndex++) {
-          const column = block.data.props.columns[colIndex];
-          if (column.childrenIds.includes(blockId)) {
+      switch (block.type) {
+        case 'EmailLayout': {
+          if (block.data.childrenIds?.includes(blockId)) {
             return {
               parentId,
-              parentType: 'ColumnsContainer',
-              index: column.childrenIds.indexOf(blockId),
-              columnIndex: colIndex,
-              childrenIds: column.childrenIds,
+              parentType: 'EmailLayout',
+              index: block.data.childrenIds.indexOf(blockId),
+              columnIndex: null,
+              childrenIds: block.data.childrenIds,
             };
           }
+          break;
         }
+
+        case 'Container': {
+          if (block.data.props!.childrenIds!.includes(blockId)) {
+            return {
+              parentId,
+              parentType: 'Container',
+              index: block.data.props!.childrenIds!.indexOf(blockId),
+              columnIndex: null,
+              childrenIds: block.data.props!.childrenIds,
+            };
+          }
+          break;
+        }
+
+        case 'ColumnsContainer': {
+          for (let colIndex = 0; colIndex < block.data.props!.columns.length; colIndex++) {
+            const column = block.data.props!.columns[colIndex];
+            if (column.childrenIds.includes(blockId)) {
+              return {
+                parentId,
+                parentType: 'ColumnsContainer',
+                index: column.childrenIds.indexOf(blockId),
+                columnIndex: colIndex,
+                childrenIds: column.childrenIds,
+              };
+            }
+          }
+          break;
+        }
+
+        default:
+          break;
       }
     }
     return null;
@@ -81,7 +92,7 @@ const DocumentUtils: DocumentUtils = {
       return document;
     }
 
-    const newDocument: any = { ...document };
+    const newDocument: typeof document = { ...document };
 
     // if the both ids are the part of same children ids
     if (
@@ -209,7 +220,44 @@ export default function EditorBlockWrapper({ children }: TEditorBlockWrapperProp
   const blockId = useCurrentBlockId();
   const document = useDocument();
   const ref = useRef<HTMLDivElement>(null);
+
   const [mouseInside, setMouseInside] = useState(false);
+
+  const allIds = useMemo(() => {
+    const ids: string[] = [];
+    for (const [_, b] of Object.entries(document)) {
+      const block = b as TEditorBlock;
+
+      switch (block.type) {
+        case 'EmailLayout':
+          if (block.data?.childrenIds) {
+            ids.push(...block.data.childrenIds);
+          }
+          break;
+
+        case 'Container':
+          if (block.data?.props?.childrenIds) {
+            ids.push(...block.data.props.childrenIds);
+          }
+          break;
+
+        case 'ColumnsContainer':
+          if (block.data?.props?.columns) {
+            for (const column of block.data.props.columns) {
+              if (column.childrenIds) {
+                ids.push(...column.childrenIds);
+              }
+            }
+          }
+          break;
+
+        default:
+          break;
+      }
+    }
+
+    return ids;
+  }, [document]);
 
   const moveBlock = useCallback(
     (dragId: string, hoverId: string, hoverClientY: number, hoverMiddleY: number) => {
@@ -221,32 +269,55 @@ export default function EditorBlockWrapper({ children }: TEditorBlockWrapperProp
     [document]
   );
 
-  const [{ handlerId }, drop] = useDrop({
+  interface DragItem {
+    id: string;
+  }
+  const [{ handlerId }, drop] = useDrop<DragItem, void, { handlerId: Identifier | null }>({
     accept: ItemTypes.BLOCK,
     collect(monitor) {
       return {
         handlerId: monitor.getHandlerId(),
       };
     },
-    hover(item: any, monitor) {
+    hover(item: { id: string }, monitor) {
       if (!ref.current) return;
 
       const dragId = item.id;
       const hoverId = blockId;
-
+     if(document[hoverId].type === "ColumnsContainer" || document[hoverId].type === "Container") return  
       if (dragId === hoverId) return;
-      const nDocument = { ...document };
-      const allIds = Object.entries(nDocument).flatMap(([id, b]) => {
-        const block = b as any;
-        if (block.data?.childrenIds) {
-          return block.data.childrenIds;
-        } else if (block.data?.props?.childrenIds) {
-          return block.data.props.childrenIds;
-        } else if (block.data?.props?.columns) {
-          return block.data.props.columns.flatMap((c: { childrenIds: [] }) => c.childrenIds);
-        }
-        return [];
-      });
+      // const nDocument = { ...document };
+      // const allIds: string[] = [];
+      // for (const [_, b] of Object.entries(nDocument)) {
+      //   const block = b as TEditorBlock;
+
+      //   switch (block.type) {
+      //     case 'EmailLayout':
+      //       if (block.data?.childrenIds) {
+      //         allIds.push(...block.data.childrenIds);
+      //       }
+      //       break;
+
+      //     case 'Container':
+      //       if (block.data?.props?.childrenIds) {
+      //         allIds.push(...block.data.props.childrenIds);
+      //       }
+      //       break;
+
+      //     case 'ColumnsContainer':
+      //       if (block.data?.props?.columns) {
+      //         for (const column of block.data.props.columns) {
+      //           if (column.childrenIds) {
+      //             allIds.push(...column.childrenIds);
+      //           }
+      //         }
+      //       }
+      //       break;
+
+      //     default:
+      //       break;
+      //   }
+      // }
 
       const hoverIndex = allIds.indexOf(hoverId);
       const dragIndex = allIds.indexOf(dragId);
@@ -266,6 +337,7 @@ export default function EditorBlockWrapper({ children }: TEditorBlockWrapperProp
         return;
       }
       moveBlock(dragId, hoverId, hoverClientY, hoverMiddleY);
+      item.id = dragId;
     },
   });
 
